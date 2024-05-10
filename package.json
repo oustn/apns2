@@ -1,7 +1,7 @@
 {
-  "name": "apns2",
-  "version": "11.7.0",
-  "description": "Node client for connecting to Apple's Push Notification Service using the new HTTP/2 protocol with JSON web tokens.",
+  "name": "@oustn/cloudflare-apns2",
+  "version": "1.0.0",
+  "description": "Cloudflare worker client for connecting to Apple's Push Notification Service using the new HTTP/2 protocol with JSON web tokens.",
   "author": "Andrew Barba <barba@hey.com>",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -28,8 +28,7 @@
     "watchos"
   ],
   "dependencies": {
-    "fast-jwt": "^4.0.0",
-    "fetch-http2": "^1.4.0"
+    "@tsndr/cloudflare-worker-jwt": "^2.5.3"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.6.3",

@@ -1,6 +1,5 @@
-import { EventEmitter } from 'node:events'
-import { type PrivateKey, createSigner } from 'fast-jwt'
-import { type RequestInit, type Response, fetch } from 'fetch-http2'
+import { EventEmitter } from 'events'
+
 import { Errors } from './errors'
 import { type Notification, Priority } from './notifications/notification'
 
@@ -10,7 +9,7 @@ const API_VERSION = 3
 // Signing algorithm for JSON web token
 const SIGNING_ALGORITHM = 'ES256'
 
-// Reset our signing token every 55 minutes as reccomended by Apple
+// Reset our signing token every 55 minutes as recommended by Apple
 const RESET_TOKEN_INTERVAL_MS = 55 * 60 * 1000
 
 export enum Host {
@@ -25,7 +24,7 @@ export interface SigningToken {
 
 export interface ApnsOptions {
   team: string
-  signingKey: string | Buffer | PrivateKey
+  signingKey: string
   keyId: string
   defaultTopic?: string
   host?: Host | string
@@ -36,11 +35,30 @@ export interface ApnsOptions {
   pingInterval?: number
 }
 
+interface SignerOption {
+  key: string
+  algorithm: string
+  kid: string
+}
+
+async function createSigner({ key, algorithm, kid }: SignerOption) {
+  const { sign } = await import('@tsndr/cloudflare-worker-jwt')
+  return (claims: Parameters<typeof sign>[0]): Promise<string> => {
+    return sign(claims, key, {
+      algorithm,
+      header: {
+        algorithm,
+        kid
+      }
+    })
+  }
+}
+
 export class ApnsClient extends EventEmitter {
   readonly team: string
   readonly keyId: string
   readonly host: Host | string
-  readonly signingKey: string | Buffer | PrivateKey
+  readonly signingKey: string
   readonly defaultTopic?: string
   readonly requestTimeout?: number
   readonly keepAlive?: boolean | number
@@ -78,36 +96,31 @@ export class ApnsClient extends EventEmitter {
   private async _send(notification: Notification) {
     const token = encodeURIComponent(notification.deviceToken)
     const url = `https://${this.host}/${API_VERSION}/device/${token}`
-    const options: RequestInit = {
-      method: 'POST',
-      headers: {
-        authorization: `bearer ${this._getSigningToken()}`,
-        'apns-push-type': notification.pushType,
-        'apns-topic': notification.options.topic ?? this.defaultTopic
-      },
-      body: JSON.stringify(notification.buildApnsOptions()),
-      timeout: this.requestTimeout,
-      keepAlive: this.keepAlive ?? this.pingInterval ?? 5000
-    }
-
-    if (notification.priority !== Priority.immediate) {
-      options.headers!['apns-priority'] = notification.priority.toString()
-    }
-
-    if (notification.options.expiration) {
-      options.headers!['apns-expiration'] =
+    const headers = new Headers()
+    headers.set('authorization', `bearer ${await this._getSigningToken()}`)
+    headers.set('apns-push-type', notification.pushType)
+    headers.set('apns-priority', notification.priority.toString())
+    if (notification.options.topic || this.defaultTopic)
+      headers.set('apns-topic', (notification.options.topic ?? this.defaultTopic) as string)
+    if (notification.options.expiration)
+      headers.set(
+        'apns-expiration',
         typeof notification.options.expiration === 'number'
           ? notification.options.expiration.toFixed(0)
           : (notification.options.expiration.getTime() / 1000).toFixed(0)
-    }
-
-    if (notification.options.collapseId) {
-      options.headers!['apns-collapse-id'] = notification.options.collapseId
+      )
+    if (notification.options.collapseId)
+      headers.set('apns-collapse-id', notification.options.collapseId)
+    const options: RequestInit = {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify(notification.buildApnsOptions())
+      // keepAlive: 5000
     }
 
     const res = await fetch(url, options)
 
-    return this._handleServerResponse(res, notification)
+    return this._handleServerResponse(res as unknown as Response, notification)
   }
 
   private async _handleServerResponse(res: Response, notification: Notification) {
@@ -137,7 +150,7 @@ export class ApnsClient extends EventEmitter {
     throw json
   }
 
-  private _getSigningToken(): string {
+  private async _getSigningToken(): Promise<string> {
     if (this._token && Date.now() - this._token.timestamp < RESET_TOKEN_INTERVAL_MS) {
       return this._token.value
     }
@@ -147,13 +160,13 @@ export class ApnsClient extends EventEmitter {
       iat: Math.floor(Date.now() / 1000)
     }
 
-    const signer = createSigner({
+    const signer = await createSigner({
       key: this.signingKey,
       algorithm: SIGNING_ALGORITHM,
       kid: this.keyId
     })
 
-    const token = signer(claims)
+    const token = await signer(claims)
 
     this._token = {
       value: token,
